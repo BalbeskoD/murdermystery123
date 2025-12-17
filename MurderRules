@@ -1,0 +1,245 @@
+local MurderRules = hype.component.define("MurderRules")
+
+local ROLE_MURDERER = 0
+local ROLE_SHERIFF = 1
+local ROLE_INNOCENT = 2
+
+function MurderRules:onInit()
+    -- Settings
+    self.murdererRatio = 3
+    self.sheriffRatio = 3
+    
+    -- Subscriptions
+    hype.localSignal.subscribe({ id = "Rules_OnStart" }, self, self.onStartRound)
+    hype.localSignal.subscribe({ id = "Rules_TimeExpired" }, self, self.onTimeUp)
+    hype.localSignal.subscribe({ id = "Rules_OnPlayerLeave" }, self, self.onLogicPlayerLeft)
+    
+    hype.remoteSignal.subscribe({ id = "S_ClientReportHit" }, self, self.onClientHit)
+    hype.remoteSignal.subscribe({ id = "S_ClientPickupGun" }, self, self.onClientPickupGun)
+    hype.remoteSignal.subscribe({ id = "G_PlayerDied" }, self, self.onExternalDeath)
+
+    hype.player.events.onJoin(self, self.trackJoin)
+    hype.player.events.onLeave(self, self.trackLeave)
+
+    self.roles = {} 
+    self.playersByIndex = {}
+    self.gameActive = false
+    self.matchTotalPlayers = 0 -- Снимок количества игроков
+    
+    self:logToUI("Server Rules Ready")
+end
+
+function MurderRules:logToUI(msg)
+    local text = "[SRV] " .. tostring(msg)
+    hype.remoteSignal.send({ id = "Debug_Message" }, text)
+end
+
+function MurderRules:trackJoin(player) self.playersByIndex[player.index] = player end
+function MurderRules:trackLeave(player) end 
+
+function MurderRules:getPos(idx)
+    local p = self.playersByIndex[idx]
+    if p and p.entity then return p.entity:getPosition() end
+    return nil
+end
+
+function MurderRules:onStartRound(playersMap)
+    self.roles = {} 
+    self.gameActive = true
+    
+    for idx, p in pairs(playersMap) do self.playersByIndex[idx] = p end
+    
+    local indices = {}
+    for idx, _ in pairs(playersMap) do table.insert(indices, idx) end
+    
+    local totalPlayers = #indices
+    if totalPlayers < 1 then return end
+
+    self.matchTotalPlayers = totalPlayers
+
+    -- 1. shuffling
+    local spawnPoints = {}
+    for i = 1, totalPlayers do table.insert(spawnPoints, i) end
+    for i = totalPlayers, 2, -1 do
+        local j = math.random(i)
+        spawnPoints[i], spawnPoints[j] = spawnPoints[j], spawnPoints[i]
+        indices[i], indices[j] = indices[j], indices[i]
+    end
+
+    -- 2. roles logic
+    local numMurderers = math.max(1, math.floor(totalPlayers / self.murdererRatio))
+    local numSheriffs = math.max(1, math.floor(totalPlayers / self.sheriffRatio))
+    
+    if totalPlayers == 2 then numMurderers = 1; numSheriffs = 1 end
+
+    -- 3. roles giving
+    for i, idx in ipairs(indices) do
+        local role = ROLE_INNOCENT
+        
+        if i <= numMurderers then
+            role = ROLE_MURDERER
+        elseif i <= (numMurderers + numSheriffs) then
+            role = ROLE_SHERIFF
+        end
+        
+        self.roles[idx] = role
+        hype.remoteSignal.send({ id = "Client_SetRole", playerIndex = idx }, role, spawnPoints[i])
+    end
+    
+    -- At the beginning of the game we do NOT perform a victory check, so as not to end the solo test
+    self:sendStats() -- refresh numbers in UI
+    self:logToUI("Start! M:"..numMurderers.." S:"..numSheriffs)
+end
+
+function MurderRules:onClientHit(senderPlayer, victimIndex, victimPos, killerPos)
+    if not self.gameActive then return end
+    if type(victimIndex) ~= "number" then return end
+
+    local killerIdx = senderPlayer.index
+    local killerRole = self.roles[killerIdx]
+    local victimRole = self.roles[victimIndex]
+    
+    if killerRole == nil or victimRole == nil then return end 
+    
+    self:logToUI("Hit: " .. killerRole .. " -> " .. victimRole)
+
+    if killerRole == ROLE_MURDERER then
+        if victimRole == ROLE_MURDERER then return end -- DONT KILL teammates
+        self:killPlayer(victimIndex, victimPos)
+        
+    elseif killerRole == ROLE_SHERIFF then
+        if victimRole == ROLE_MURDERER then
+            self:killPlayer(victimIndex, victimPos)
+        elseif victimRole == ROLE_INNOCENT or victimRole == ROLE_SHERIFF then
+            self:logToUI("Sheriff FAIL! Both die.")
+            self:killPlayer(victimIndex, victimPos) 
+            self:killPlayer(killerIdx, killerPos) 
+        end
+    end
+end
+
+function MurderRules:killPlayer(targetIdx, deathPos)
+    if not deathPos then deathPos = self:getPos(targetIdx) end
+    hype.remoteSignal.send({ id = "Client_KillCommand", playerIndex = targetIdx })
+    self:processDeath(targetIdx, deathPos)
+end
+
+function MurderRules:onExternalDeath(killerIdx, victimPlayer)
+    if victimPlayer then
+        local pos = nil
+        if victimPlayer.entity then pos = victimPlayer.entity:getPosition() end
+        self:processDeath(victimPlayer.index, pos)
+    end
+end
+
+function MurderRules:processDeath(deadIdx, knownPos)
+    if self.roles[deadIdx] == nil then return end
+    
+    local role = self.roles[deadIdx]
+    self.roles[deadIdx] = nil 
+    
+    self:logToUI("Died ID: " .. deadIdx .. " (" .. role .. ")")
+
+    if role == ROLE_SHERIFF then
+        self:tryDropGun(deadIdx, knownPos)
+    end
+    
+    self:checkWinCondition()
+end
+
+function MurderRules:tryDropGun(idx, knownPos)
+    local dropPos = knownPos
+    if not dropPos then dropPos = self:getPos(idx) end
+    if dropPos then
+        hype.remoteSignal.send({ id = "Client_DropGun" }, dropPos)
+    end
+end
+
+function MurderRules:onClientPickupGun(senderPlayer)
+    if not self.gameActive then return end
+    if self.roles[senderPlayer.index] == ROLE_MURDERER then return end -- Murder cant take gun
+
+    self:logToUI("New Sheriff: " .. senderPlayer.index)
+    self.roles[senderPlayer.index] = ROLE_SHERIFF
+    hype.remoteSignal.send({ id = "Client_SetRole", playerIndex = senderPlayer.index }, ROLE_SHERIFF, 0)
+    
+    -- recalculate roles balance
+    self:checkWinCondition()
+end
+
+-- additional help for UI
+function MurderRules:sendStats()
+    local count = 0
+    for _ in pairs(self.roles) do count = count + 1 end
+    
+    
+    local total = self.matchTotalPlayers 
+    hype.remoteSignal.send({ id = "UI_UpdateStats" }, count, total)
+    return count
+end
+
+-- === Win logic (SOLO SAFE) ===
+function MurderRules:checkWinCondition()
+    if not self.gameActive then return end
+    
+    local murderersAlive = 0
+    local othersAlive = 0
+    local totalAlive = 0
+    
+    for _, role in pairs(self.roles) do
+        totalAlive = totalAlive + 1
+        if role == ROLE_MURDERER then
+            murderersAlive = murderersAlive + 1
+        else
+            othersAlive = othersAlive + 1
+        end
+    end
+    
+    self:sendStats() -- Refresh UI
+
+   --Solomode
+    if self.matchTotalPlayers == 1 then
+       
+        if totalAlive == 0 then
+            self:finishGame("Test Over (You Died)")
+        end
+        return 
+    end
+
+    -- !!! Simple mode (2+ player) !!!
+    
+    -- 1. all murderers dead
+    if murderersAlive == 0 then
+        self:finishGame("Innocents Win!")
+        return
+    end
+    
+    -- 2. all good dead
+    if othersAlive == 0 then
+        self:finishGame("Murderers Win!")
+        return
+    end
+end
+
+function MurderRules:onLogicPlayerLeft(player)
+    if not self.gameActive then return end
+    self.playersByIndex[player.index] = nil 
+    if self.roles[player.index] ~= nil then
+        self:logToUI("Left: " .. player.index)
+        self:processDeath(player.index, nil)
+    end
+end
+
+function MurderRules:onTimeUp() self:finishGame("Innocents Win! Time over.") end
+
+function MurderRules:finishGame(reason)
+    self:logToUI("End: " .. reason)
+    self.gameActive = false
+    hype.localSignal.send({ id = "Core_ForceEnd" }, reason)
+    hype.remoteSignal.send({ id = "Client_GameEnd" })
+end
+
+hype.node.registerComponent(MurderRules, "MurderRules", {
+    { name = "Murderer Ratio (1 per N)", type = hype.node.DataType.Number, default = 6, handler = function(self, p, v) self.murdererRatio = v end },
+    { name = "Sheriff Ratio (1 per N)", type = hype.node.DataType.Number, default = 6, handler = function(self, p, v) self.sheriffRatio = v end },
+}, {})
