@@ -1,0 +1,104 @@
+local GameClientListener = hype.component.define("GameClientListener")
+
+function GameClientListener:onInit()
+    -- personal singals(roles, death, inventary)
+    hype.remoteSignal.subscribe({ id = "Client_SetRole" }, self, self.onRoleSet)
+    hype.remoteSignal.subscribe({ id = "Client_KillCommand" }, self, self.onKillCommand)
+    
+    -- Common signals (for all)
+    hype.remoteSignal.subscribe({ id = "Client_DropGun" }, self, self.onDropGun)
+    hype.remoteSignal.subscribe({ id = "Client_GameEnd" }, self, self.onGameEnd)
+    
+    -- Listening game state from gamecore
+    hype.remoteSignal.subscribe({ id = "UI_SetState" }, self, self.onGameStateChange)
+end
+
+-- 1. State change (start/end of game)
+function GameClientListener:onGameStateChange(state, time)
+    if state == "Playing" then
+        print("[Client] Game Started! Logic running...")
+       
+        hype.node.pushOutput(self, "On Game Start", 1)
+        
+    elseif state == "PostGame" then
+        print("[Client] Game Ended! Resetting...")
+     
+        hype.node.pushOutput(self, "On Game End", 1)
+    end
+end
+
+-- 2. Giving role and spawn points
+
+function GameClientListener:onRoleSet(roleID, spawnIndex)
+    print("Received Role ID: " .. tostring(roleID) .. " | Spawn Index: " .. tostring(spawnIndex))
+    
+    -- А. Role logic
+    if roleID == 0 then -- Murderer
+        hype.node.pushOutput(self, "Is Murderer", 1)
+        hype.node.pushOutput(self, "Give Knife", 1)
+        
+    elseif roleID == 1 then -- Sheriff
+        hype.node.pushOutput(self, "Is Sheriff", 1)
+        hype.node.pushOutput(self, "Give Gun", 1)
+        
+    else -- Innocent
+        hype.node.pushOutput(self, "Is Innocent", 1)
+    end
+
+    -- B. Spawn logic
+   
+    if spawnIndex and spawnIndex > 0 then
+          hype.node.pushOutput(self, "Spawn Point Index", spawnIndex)
+        
+     
+        hype.node.pushOutput(self, "Trigger Spawn", 1)
+    end
+end
+
+-- 3. Death (i was killed)
+function GameClientListener:onKillCommand()
+    print("Received Kill Command")
+    hype.node.pushOutput(self, "Die", 1)
+end
+
+-- 4. Drop of the gun (if sherif dead)
+function GameClientListener:onDropGun(position)
+    if position then
+      
+        hype.node.pushOutput(self, "Spawn Gun At", position)
+   
+        hype.node.pushOutput(self, "Trigger Gun Drop", 1)
+    end
+end
+
+-- 5. Game end
+function GameClientListener:onGameEnd()
+    hype.node.pushOutput(self, "Clear Inventory", 1)
+end
+
+hype.node.registerComponent(GameClientListener, "GameClientListener", {}, {
+    -- Game logic
+    { name = "On Game Start", type = hype.node.DataType.Number }, 
+    { name = "On Game End", type = hype.node.DataType.Number },   
+    
+    -- Spawn logic
+    { name = "Spawn Point Index", type = hype.node.DataType.Number }, -- Куда тепать (1..N)
+    { name = "Trigger Spawn", type = hype.node.DataType.Number },     -- Команда "Телепортируй!"
+    
+    -- Inventory
+    { name = "Give Knife", type = hype.node.DataType.Number },
+    { name = "Give Gun", type = hype.node.DataType.Number },
+    { name = "Clear Inventory", type = hype.node.DataType.Number },
+    
+    -- Gun drop
+    { name = "Spawn Gun At", type = hype.node.DataType.Vector },      -- Координаты
+    { name = "Trigger Gun Drop", type = hype.node.DataType.Number },  -- Команда "Спавни!"
+    
+    -- Health
+    { name = "Die", type = hype.node.DataType.Number },
+    
+    -- Role flags
+    { name = "Is Murderer", type = hype.node.DataType.Number },
+    { name = "Is Sheriff", type = hype.node.DataType.Number },
+    { name = "Is Innocent", type = hype.node.DataType.Number },
+})
