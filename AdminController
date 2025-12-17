@@ -1,0 +1,25 @@
+local AdminController = hype.component.define("AdminController")
+
+function AdminController:onInit()
+    print("[AdminController] Init on Client")
+end
+
+function AdminController:requestStart(player, val)
+    
+    if val and val > 0 then
+        
+        
+        hype.remoteSignal.send({ id = "CMD_StartGame" }) 
+    end
+end
+
+function AdminController:requestEnd(player, val)
+    if val and val > 0 then
+        hype.remoteSignal.send({ id = "CMD_EndGame" }) 
+    end
+end
+
+hype.node.registerComponent(AdminController, "AdminController", {
+    { name = "Btn_Start", type = hype.node.DataType.Number, handler = AdminController.requestStart },
+    { name = "Btn_End", type = hype.node.DataType.Number, handler = AdminController.requestEnd },
+}, {})
