@@ -1,0 +1,59 @@
+local GameEventsLocal = hype.component.define("GameEventsLocal")
+
+function GameEventsLocal:onInit() end
+
+function GameEventsLocal:reportHit(player, victimIndex: Number)
+-- checks
+if victimIndex == nil or victimIndex < 0 then return end
+local myPlayer = hype.player.getLocal()
+if myPlayer and myPlayer.index == victimIndex then return end
+
+-- 1. Victim position
+local victimObj = hype.player.getByIndex(victimIndex)
+local victimPos = vector.create(0,0,0)
+
+if victimObj and victimObj.entity then
+victimPos = victimObj.entity:getPosition()
+end
+
+-- 2. Mine position
+local myPos = vector.create(0,0,0)
+if myPlayer and myPlayer.entity then
+myPos = myPlayer.entity:getPosition()
+end
+
+-- 3. Sending on server
+
+print("[Client] Hit report -> Victim: " .. victimIndex .. " at " .. tostring(victimPos))
+hype.remoteSignal.send({ id = "S_ClientReportHit" }, victimIndex, victimPos, myPos)
+
+hype.node.pushOutput(self, "LocalHitFeedback", 1)
+end
+
+function GameEventsLocal:pickupGun(player)
+hype.remoteSignal.send({ id = "S_ClientPickupGun" })
+end
+
+hype.node.registerComponent(GameEventsLocal, "GameEventsLocal", {
+{ name = "Report Hit (Index)", type = hype.node.DataType.Number, handler = GameEventsLocal.reportHit },
+{ name = "On Gun Pickup", type = hype.node.DataType.Number, handler = GameEventsLocal.pickupGun },
+}, {
+{ name = "LocalHitFeedback", type = hype.node.DataType.Number },
+})loc player.index)
+        self:processDeath(player.index, nil)
+    end
+end
+
+function MurderRules:onTimeUp() self:finishGame("Innocents Win! Time over.") end
+
+function MurderRules:finishGame(reason)
+    self:logToUI("End: " .. reason)
+    self.gameActive = false
+    hype.localSignal.send({ id = "Core_ForceEnd" }, reason)
+    hype.remoteSignal.send({ id = "Client_GameEnd" })
+end
+
+hype.node.registerComponent(MurderRules, "MurderRules", {
+    { name = "Murderer Ratio (1 per N)", type = hype.node.DataType.Number, default = 6, handler = function(self, p, v) self.murdererRatio = v end },
+    { name = "Sheriff Ratio (1 per N)", type = hype.node.DataType.Number, default = 6, handler = function(self, p, v) self.sheriffRatio = v end },
+}, {})
