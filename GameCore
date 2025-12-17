@@ -1,0 +1,141 @@
+local GameCore = hype.component.define("GameCore")
+
+local STATE_WAITING = 0
+local STATE_INTERMISSION = 1
+local STATE_PLAYING = 2
+local STATE_POSTGAME = 3
+
+function GameCore:onInit()
+    self.state = STATE_WAITING
+    self.timer = 0
+    self.players = {} 
+    self.minPlayers = 1 
+    self.times = { intermission = 5, round = 300, postgame = 5 }
+
+    hype.core.events.onUpdate(self, self.onUpdate)
+    hype.player.events.onJoin(self, self.onPlayerJoin)
+    hype.player.events.onLeave(self, self.onPlayerLeave)
+    
+    -- local signal 
+    hype.localSignal.subscribe({ id = "Core_ForceEnd" }, self, self.forceEndGame)
+    
+    -- remote signals
+    hype.remoteSignal.subscribe({ id = "CMD_StartGame" }, self, self.onAdminStart)
+    hype.remoteSignal.subscribe({ id = "CMD_EndGame" }, self, self.onAdminEnd)
+    
+    print("[GameCore] INIT COMPLETE. Waiting for players...")
+end
+
+
+
+function GameCore:onAdminStart(senderPlayer)
+   
+    local name = "Unknown"
+    if senderPlayer and senderPlayer.name then
+        name = senderPlayer.name
+    end
+
+    print("[GameCore] ADMIN COMMAND: Start received from", name)
+    
+    if self.state == STATE_WAITING or self.state == STATE_POSTGAME then
+        self:setState(STATE_INTERMISSION)
+    else
+        print("[GameCore] Cannot start: Game already in progress!")
+    end
+end
+
+function GameCore:onAdminEnd(senderPlayer)
+    local name = "Unknown"
+    if senderPlayer and senderPlayer.name then
+        name = senderPlayer.name
+    end
+
+    print("[GameCore] ADMIN COMMAND: End received from", name)
+    
+    if self.state == STATE_PLAYING or self.state == STATE_INTERMISSION then
+        self:forceEndGame("Admin Force Stop")
+    end
+end
+
+function GameCore:onUpdate(dt)
+    if self.state == STATE_WAITING then
+        -- auto start - uncomment for enable
+        -- if self:getPlayerCount() >= self.minPlayers then
+        --    self:setState(STATE_INTERMISSION)
+        -- end
+
+    elseif self.state == STATE_INTERMISSION then
+        self.timer = self.timer - dt
+        if self.timer <= 0 then
+            print("[GameCore] Intermission over -> STARTING GAME")
+            self:setState(STATE_PLAYING)
+        end
+
+    elseif self.state == STATE_PLAYING then
+        self.timer = self.timer - dt
+        if self.timer <= 0 then
+            print("[GameCore] Time limit reached!")
+            hype.localSignal.send({ id = "Rules_TimeExpired" })
+            self:setState(STATE_POSTGAME, "Time Up")
+        end
+
+    elseif self.state == STATE_POSTGAME then
+        self.timer = self.timer - dt
+        if self.timer <= 0 then
+            print("[GameCore] Postgame over -> Resetting")
+            self:setState(STATE_WAITING)
+        end
+    end
+end
+
+function GameCore:setState(newState, winReason)
+    self.state = newState
+    
+    if newState == STATE_INTERMISSION then
+        self.timer = self.times.intermission
+        hype.remoteSignal.send({ id = "UI_SetState" }, "Intermission", self.timer)
+        
+    elseif newState == STATE_PLAYING then
+        self.timer = self.times.round
+        hype.remoteSignal.send({ id = "UI_SetState" }, "Playing", self.timer)
+        
+        print("[GameCore] Sending 'Rules_OnStart' to Rules script...")
+        hype.localSignal.send({ id = "Rules_OnStart" }, self.players)
+        
+    elseif newState == STATE_POSTGAME then
+        self.timer = self.times.postgame
+        hype.remoteSignal.send({ id = "UI_SetState" }, "PostGame", self.timer, winReason)
+        hype.localSignal.send({ id = "Rules_OnEnd" })
+        
+    elseif newState == STATE_WAITING then
+        hype.remoteSignal.send({ id = "UI_SetState" }, "Waiting", 0)
+    end
+end
+
+function GameCore:forceEndGame(reason)
+    print("[GameCore] Received Force End Signal. Reason: " .. tostring(reason))
+    if self.state == STATE_PLAYING or self.state == STATE_INTERMISSION then
+        self:setState(STATE_POSTGAME, reason)
+    end
+end
+
+function GameCore:onPlayerJoin(player)
+    self.players[player.index] = player
+    hype.localSignal.send({ id = "Rules_OnPlayerJoin" }, player)
+end
+
+function GameCore:onPlayerLeave(player)
+    self.players[player.index] = nil
+    if self.state == STATE_PLAYING and self:getPlayerCount() < self.minPlayers then
+        self:setState(STATE_POSTGAME, "Not enough players")
+    end
+    hype.localSignal.send({ id = "Rules_OnPlayerLeave" }, player)
+end
+
+function GameCore:getPlayerCount()
+    local c = 0
+    for _ in pairs(self.players) do c = c + 1 end
+    return c
+end
+
+hype.node.registerComponent(GameCore, "GameCore", {}, {})
