@@ -1,6 +1,6 @@
 # Murder Mystery 200 Players
 
-**Murder Mystery 2** is a popular multiplayer social deduction game on the **Roblox** platform, created by **Nikilis**.
+**Murder Mystery 200 Players** is a popular multiplayer social deduction game 
 
 ## 🔥 HypeHype version
 
