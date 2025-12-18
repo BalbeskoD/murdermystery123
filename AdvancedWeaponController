@@ -1,0 +1,248 @@
+local AdvancedWeaponController = hype.component.define("AdvancedWeaponController")
+
+-- Roles
+local ROLE_MURDERER = 0
+local ROLE_SHERIFF = 1
+local ROLE_INNOCENT = 2
+
+-- Additional functions
+local function setOwner(entity, index)
+    if not entity or not index then return end
+    local comps = entity:getComponents("ProjectileShootable")
+    if comps then
+        for _, c in ipairs(comps) do
+            if c and c.setShooterIndex then c:setShooterIndex(index) end
+        end
+    end
+end
+
+-- Init
+function AdvancedWeaponController:onInit()
+    print("[INFO] AdvancedWeaponController:onInit() - Component init.")
+    
+    -- UI SETTINGS
+    self.uiWidgetName = "WeaponHUD" 
+    self.nameBtnShoot = "Btn_Shoot"
+    self.nameBtnStab  = "Btn_Stab"
+    self.nameBtnEquipKnife = "Btn_EquipKnife"
+    self.nameBtnEquipGun   = "Btn_EquipGun" 
+    
+    -- Prefab names for additional search
+    self.knifePrefabName = "KnifeCollision"
+    self.gunPrefabName = "BulletCollision"
+    self.meleeHitboxName = "HitCollision"
+
+    -- Prefab links
+    self.knifePrefab = nil
+    self.gunPrefab = nil
+    self.meleeHitbox = nil
+
+    -- Gun settings
+    self.fireRate = 0.4
+    self.speed = 120
+    self.spawnOffset = 2
+    self.raycastDistance = 500
+
+    -- State varibales
+    self.currentRole = ROLE_INNOCENT
+    self.isEquipped = false
+    self.isShooting = false
+    self.timer = 0
+    self.initialized = false
+    self.initAcc = 0
+
+    -- Animation logic
+    self.isAnimatingAction = false
+    self.animationTimer = 0
+    self.animationResetDelay = 0.3
+    
+    -- Animations names
+    self.animNameIdle = "Stand Idle"
+    self.animNameRun = "Run"
+    self.animNameHit = "Hit"
+    self.animNameShoot = "Shoot Pistol"
+    self.animNameThrow = "Throw"
+
+    -- Subscriptions
+    hype.remoteSignal.subscribe({ id = "Client_SetRole" }, self, self.onSetRole)
+    hype.remoteSignal.subscribe({ id = "Net_Shoot" }, self, self.onRemoteShoot)
+    hype.remoteSignal.subscribe({ id = "UI_SetState" }, self, self.onGameStateChange)
+    self.updateSub = hype.core.events.onUpdate(self, self.onUpdate)
+end
+
+function AdvancedWeaponController:onDestroy()
+    if self.updateSub then self.updateSub:unsubscribe() end
+end
+
+
+function AdvancedWeaponController:onUpdate(dt)
+ 
+    if not self.initialized then
+        self.initAcc = self.initAcc + dt
+        if self.initAcc > 1.0 then 
+            self:connectUI()
+            self.initialized = true
+        end
+        return
+    end
+
+    -- Animation resetting logic
+    if self.isAnimatingAction then
+        self.animationTimer = self.animationTimer + dt
+        if self.animationTimer >= self.animationResetDelay then
+            self.isAnimatingAction = false
+            self.animationTimer = 0
+            self:resetToDefaultAnimation()
+        end
+    end
+
+    -- Dynamic gun logic
+    if self.isShooting then
+        self.timer = self.timer + dt
+        if self.timer >= self.fireRate then
+            self.timer = 0
+            self:fireProjectile()
+        end
+    end
+end
+
+-- play anim on local player
+function AdvancedWeaponController:playAnimation(animName)
+    if not animName or animName == "" then return end
+    local lp = hype.player.getLocal()
+    if not lp or not lp.entity then return end
+    local animComponent = hype.animation.get(lp.entity)
+    if animComponent then
+        animComponent:setAnimation(animName)
+        print("[ANIM] Set animation to: " .. animName)
+    else
+        print("[ANIM-ERROR] Animation Component not found on the local player entity!")
+    end
+end
+
+-- if speed = specific anim
+function AdvancedWeaponController:resetToDefaultAnimation()
+    print("[ANIM] Resetting to default animation...")
+    local lp = hype.player.getLocal()
+    if not lp or not lp.entity then return end
+
+    
+    local velocity = vector.create(0, 0, 0)
+    local physicsBody = hype.physics.get(lp.entity) 
+    if physicsBody and physicsBody.getVelocity then  
+        velocity = physicsBody:getVelocity()  
+    end
+    -- ================================================
+
+    if vector.magnitude(velocity) < 0.1 then
+        self:playAnimation(self.animNameIdle)
+    else
+        self:playAnimation(self.animNameRun)
+    end
+end
+
+
+-- Stab logic
+function AdvancedWeaponController:performStab()
+    local hitboxPrefab = self:getValidPrefab(self.meleeHitbox, self.meleeHitboxName)
+    if not hitboxPrefab then return end
+    local lp = hype.player.getLocal()
+    if not lp or not lp.entity then return end
+    local pPos = lp.entity:getPosition()
+    local playerDir = lp.entity:getDirection()
+    local spawnPos = vector.create(pPos.x, pPos.y + 0.1 , pPos.z) + (playerDir * 0.7)
+    local hb = hype.world.spawn(hitboxPrefab, spawnPos)
+    if hb then
+        setOwner(hb, lp.index)
+        local rot = hype.math.directionToRotation(playerDir)
+        hype.transform.setRotation(hb, rot, hype.transform.Space.World)
+    end
+    self:playAnimation(self.animNameHit)
+    self.isAnimatingAction = true
+    self.animationTimer = 0
+    hype.node.pushOutput(self, "OnStabTrigger", 1)
+end
+
+-- Shoot logic
+function AdvancedWeaponController:fireProjectile()
+    local prefab = nil
+    if self.currentRole == ROLE_MURDERER then 
+        prefab = self:getValidPrefab(self.knifePrefab, self.knifePrefabName)
+    elseif self.currentRole == ROLE_SHERIFF then 
+        prefab = self:getValidPrefab(self.gunPrefab, self.gunPrefabName)
+    end
+    if not prefab then return end
+    local localPlayer = hype.player.getLocal()
+    if not localPlayer or not localPlayer.entity then return end
+    local playerEntity = localPlayer.entity
+    local playerPos = playerEntity:getPosition(true)
+    local cameraPos = hype.camera.getPosition()
+    local cameraDir = hype.camera.getDirection()
+    local rayOrigin = cameraPos + cameraDir * vector.magnitude(playerPos - cameraPos)
+    local rayDir = cameraDir * self.raycastDistance
+    local rayTarget = rayOrigin + rayDir
+    local hit = hype.physics.raycast(rayOrigin, rayDir, { ignoreGroupFilter = { 2, 5 } })
+    local hitPos = rayTarget
+    if hit[1] and hit[1].position then hitPos = hit[1].position end
+    local spawnPos = playerPos + cameraDir * self.spawnOffset
+    local direction = vector.normalize(hitPos - spawnPos)
+    local projectile = hype.world.spawn(prefab, spawnPos)
+    if projectile then
+        setOwner(projectile, localPlayer.index)
+        hype.physics.setVelocity(projectile, direction * self.speed)
+        local rot = hype.math.directionToRotation(direction)
+        hype.transform.setRotation(projectile, rot, hype.transform.Space.World)
+        if self.currentRole == ROLE_MURDERER then
+            self:playAnimation(self.animNameThrow)
+        elseif self.currentRole == ROLE_SHERIFF then
+            self:playAnimation(self.animNameShoot)
+        end
+        self.isAnimatingAction = true
+        self.animationTimer = 0
+    end
+    hype.remoteSignal.send({ id = "Net_Shoot" }, spawnPos, hitPos, self.speed, self.currentRole)
+    hype.node.pushOutput(self, "OnShootTrigger", 1)
+end
+
+
+function AdvancedWeaponController:findBtn(root, name) if not root then return nil end local status, res = pcall(function() return root:findChild(name) end) if status and res then return res end return hype.ui.find(name) end
+function AdvancedWeaponController:connectUI() print("[INFO] connectUI() - Поиск UI: '" .. self.uiWidgetName .. "'") self.uiRoot = hype.ui.find(self.uiWidgetName) if not self.uiRoot then print("[CRITICAL] UI Node '" .. self.uiWidgetName .. "' NOT FOUND!") return end print("[INFO] UI Root FOUND! looking for buttons") self.btnEquipKnife = self:findBtn(self.uiRoot, self.nameBtnEquipKnife) self.btnEquipGun = self:findBtn(self.uiRoot, self.nameBtnEquipGun) self.btnShoot = self:findBtn(self.uiRoot, self.nameBtnShoot) self.btnStab = self:findBtn(self.uiRoot, self.nameBtnStab) if self.btnShoot then print("[SUCCESS] shoot button not found.") self.btnShoot:onStart(self, function() self.isShooting = true self.timer = self.fireRate end) self.btnShoot:onEnd(self, function() self.isShooting = false end) if self.btnShoot.setPassTouchThrough then self.btnShoot:setPassTouchThrough(true) end else print("[WARN] shoot button ('" .. self.nameBtnShoot .. "') not found.") end if self.btnEquipKnife then self.btnEquipKnife:onEnd(self, self.toggleEquip) end if self.btnEquipGun then self.btnEquipGun:onEnd(self, self.toggleEquip) end if self.btnStab then self.btnStab:onEnd(self, self.performStab) end self:updateVisibility() print("[SUCCESS] UI enabled.") end
+function AdvancedWeaponController:onSetRole(roleID) print("✅ [ROLE] Got signal onSetRole. New role: " .. tostring(roleID)) self.currentRole = roleID self.isEquipped = false self:updateVisibility() end
+function AdvancedWeaponController:onGameStateChange(state) print("[STATE] Got signal onGameStateChange. New state: " .. tostring(state)) if state == "PostGame" or state == "Waiting" then self.currentRole = ROLE_INNOCENT self.isEquipped = false self:updateVisibility() end end
+function AdvancedWeaponController:toggleEquip() self.isEquipped = not self.isEquipped print("[ACTION] Inventory change. isEquipped: " .. tostring(self.isEquipped)) self:updateVisibility() hype.node.pushOutput(self, "WeaponIsActive", self.isEquipped and 1 or 0) end
+function AdvancedWeaponController:updateVisibility() if self.btnEquipKnife then self.btnEquipKnife:setVisible(false) end if self.btnEquipGun then self.btnEquipGun:setVisible(false) end if self.btnShoot then self.btnShoot:setVisible(false) end if self.btnStab then self.btnStab:setVisible(false) end if self.currentRole == ROLE_MURDERER then if self.btnEquipKnife then self.btnEquipKnife:setVisible(true) end if self.isEquipped then if self.btnShoot then self.btnShoot:setVisible(true) end if self.btnStab then self.btnStab:setVisible(true) end end elseif self.currentRole == ROLE_SHERIFF then if self.btnEquipGun then self.btnEquipGun:setVisible(true) end if self.isEquipped then if self.btnShoot then self.btnShoot:setVisible(true) end end end end
+function AdvancedWeaponController:getValidPrefab(prefabFromEditor, prefabName) if prefabFromEditor and type(prefabFromEditor.isValid) == "function" and prefabFromEditor:isValid() then return prefabFromEditor end local foundPrefab = hype.asset.findPrefab(prefabName) if not foundPrefab then print("  [CRITICAL] Prefab'" .. prefabName .. "' not found in assets.") end return foundPrefab end
+function AdvancedWeaponController:onRemoteShoot(senderIdx, spawnPos, targetPos, speed, roleID) local lp = hype.player.getLocal() if lp and senderIdx == lp.index then return end local prefab = nil if roleID == ROLE_MURDERER then prefab = self:getValidPrefab(self.knifePrefab, self.knifePrefabName) elseif roleID == ROLE_SHERIFF then prefab = self:getValidPrefab(self.gunPrefab, self.gunPrefabName) end if not prefab then return end local dir = vector.normalize(targetPos - spawnPos) local proj = hype.world.spawn(prefab, spawnPos) if proj then setOwner(proj, senderIdx) hype.physics.setVelocity(proj, dir * speed) local rot = hype.math.directionToRotation(dir) hype.transform.setRotation(proj, rot, hype.transform.Space.World) end end
+
+
+hype.node.registerComponent(AdvancedWeaponController, "AdvancedWeaponController", {
+    -- Ui and prefabs
+    { name = "UiNodeName", type = hype.node.DataType.Text, default = "WeaponHUD", handler = function(s,p,v) s.uiWidgetName = v end },
+    { name = "Button: Equip Gun", type = hype.node.DataType.Text, default = "EquipGun", handler = function(s,p,v) s.nameBtnEquipGun = v end },
+    { name = "Button: Equip Knife", type = hype.node.DataType.Text, default = "Btn_EquipKnife", handler = function(s,p,v) s.nameBtnEquipKnife = v end },
+    { name = "Button: Shoot", type = hype.node.DataType.Text, default = "Btn_Shoot", handler = function(s,p,v) s.nameBtnShoot = v end },
+    { name = "Button: Stab", type = hype.node.DataType.Text, default = "Btn_Stab", handler = function(s,p,v) s.nameBtnStab = v end },
+    { name = "Knife Prefab", type = hype.node.DataType.Entity, handler = function(s,p,v) s.knifePrefab = v end },
+    { name = "Gun Prefab", type = hype.node.DataType.Entity, handler = function(s,p,v) s.gunPrefab = v end },
+    { name = "Melee Hitbox", type = hype.node.DataType.Entity, handler = function(s,p,v) s.meleeHitbox = v end },
+    { name = "Knife Prefab Name", type = hype.node.DataType.Text, default = "KnifeCollision", handler = function(s,p,v) s.knifePrefabName = v end },
+    { name = "Gun Prefab Name", type = hype.node.DataType.Text, default = "BulletCollision", handler = function(s,p,v) s.gunPrefabName = v end },
+    { name = "Melee Hitbox Name", type = hype.node.DataType.Text, default = "HitCollision", handler = function(s,p,v) s.meleeHitboxName = v end },
+    
+    -- Gub
+    { name = "ProjectileSpeed", type = hype.node.DataType.Number, default = 120, handler = function(s,p,v) s.speed = v end },
+    { name = "SpawnOffset", type = hype.node.DataType.Number, default = 2, handler = function(s,p,v) s.spawnOffset = v end },
+    { name = "RaycastDistance", type = hype.node.DataType.Number, default = 500, handler = function(s,p,v) s.raycastDistance = v end },
+    
+    -- Anim
+    { name = "Anim: Idle", type = hype.node.DataType.Text, default = "Stand Idle", handler = function(s,p,v) s.animNameIdle = v end },
+    { name = "Anim: Run", type = hype.node.DataType.Text, default = "Run", handler = function(s,p,v) s.animNameRun = v end },
+    { name = "Anim: Hit", type = hype.node.DataType.Text, default = "Hit", handler = function(s,p,v) s.animNameHit = v end },
+    { name = "Anim: Shoot Pistol", type = hype.node.DataType.Text, default = "Shoot Pistol", handler = function(s,p,v) s.animNameShoot = v end },
+    { name = "Anim: Throw", type = hype.node.DataType.Text, default = "Throw", handler = function(s,p,v) s.animNameThrow = v end },
+
+}, {
+    { name = "WeaponIsActive", type = hype.node.DataType.Number },
+    { name = "OnShootTrigger", type = hype.node.DataType.Number },
+    { name = "OnStabTrigger", type = hype.node.DataType.Number },
+})
