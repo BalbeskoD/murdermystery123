@@ -1,0 +1,142 @@
+local GameUI = hype.component.define("GameUIController")
+
+function GameUI:onInit()
+    self.uiName = "GameHUD"
+    
+    self.timeLeft = 0
+    self.timerActive = false
+    self.timerLabel = ""
+    self.messageTimer = 0
+
+    self.uiRoot = nil
+    self.txtStatus = nil
+    self.txtRole = nil
+    self.txtMessage = nil
+    self.txtCount = nil -- [НОВОЕ]
+    
+ 
+    hype.remoteSignal.subscribe({ id = "UI_SetState" }, self, self.onStateChange)
+    hype.remoteSignal.subscribe({ id = "Client_SetRole" }, self, self.onSetRole)
+    hype.remoteSignal.subscribe({ id = "Client_YouDied" }, self, self.onDied)
+    hype.remoteSignal.subscribe({ id = "Debug_Message" }, self, self.onDebugMessage)
+    
+
+    hype.remoteSignal.subscribe({ id = "UI_UpdateStats" }, self, self.onUpdateStats)
+    
+    hype.remoteSignal.subscribe({ id = "Debug_Message" }, self, self.onDebugMessage) -- От Server MurderRules
+    hype.localSignal.subscribe({ id = "Debug_Message" }, self, self.onDebugMessage)  -- От Client PlayerScanner
+
+    hype.core.events.onUpdate(self, self.onUpdate)
+end
+
+function GameUI:onStart()
+    self:findUI()
+end
+
+function GameUI:onDebugMessage(msg)
+    self:showBigMessage("DEBUG: " .. msg, 2)
+end
+
+function GameUI:findUI()
+    self.uiRoot = hype.ui.find(self.uiName)
+    if self.uiRoot then
+        self.txtStatus = self.uiRoot:findChild("StatusText")
+        self.txtRole = self.uiRoot:findChild("RoleText")
+        self.txtMessage = self.uiRoot:findChild("CenterMessage")
+        
+       
+        self.txtCount = self.uiRoot:findChild("CountText")
+        
+        if self.txtRole then self.txtRole:setVisible(false) end
+        if self.txtMessage then self.txtMessage:setVisible(false) end
+        if self.txtCount then self.txtCount:setVisible(false) end
+        if self.txtStatus then self.txtStatus:setText("Waiting...") end
+    end
+end
+
+function GameUI:onUpdateStats(alive, total)
+    if self.txtCount then
+        self.txtCount:setVisible(true)
+        self.txtCount:setText("Alive: " .. alive .. " / " .. total)
+    end
+end
+
+function GameUI:onSetRole(roleID)
+    if not self.txtRole then return end
+    self.txtRole:setVisible(true)
+    
+    local roleName = "Innocent"
+    local col = vector.create(0, 1, 0, 1)
+    
+    if roleID == 0 then 
+        roleName = "Murderer"
+        col = vector.create(1, 0, 0, 1)
+    elseif roleID == 1 then 
+        roleName = "Sheriff"
+        col = vector.create(0, 0, 1, 1)
+    end
+    
+    self.txtRole:setText("Role: " .. roleName)
+    self.txtRole:setColor(col)
+    self:showBigMessage("YOU ARE: " .. string.upper(roleName), 4)
+end
+
+function GameUI:onStateChange(state, time, extraInfo)
+    self.timeLeft = time or 0
+    self.timerActive = (self.timeLeft > 0)
+    
+    if state == "Intermission" then
+        self.timerLabel = "Starts in: "
+        if self.txtRole then self.txtRole:setVisible(false) end
+        if self.txtCount then self.txtCount:setVisible(false) end -- Скрываем счетчик в лобби
+        
+    elseif state == "Playing" then
+        self.timerLabel = "Time: "
+        
+    elseif state == "PostGame" then
+        self.timerLabel = ""
+        self.timerActive = false
+        if self.txtStatus then self.txtStatus:setText("Game Over") end
+        self:showBigMessage(tostring(extraInfo), 6)
+        
+    elseif state == "Waiting" then
+        self.timerLabel = ""
+        self.timerActive = false
+        if self.txtStatus then self.txtStatus:setText("Waiting for players...") end
+        if self.txtRole then self.txtRole:setVisible(false) end
+    end
+end
+
+function GameUI:onDied()
+    self:showBigMessage("YOU DIED!", 5)
+    if self.txtRole then 
+        self.txtRole:setText("Spectator")
+        self.txtRole:setColor(vector.create(0.5, 0.5, 0.5, 1))
+    end
+end
+
+function GameUI:showBigMessage(text, duration)
+    if not self.txtMessage then return end
+    self.txtMessage:setVisible(true)
+    self.txtMessage:setText(text)
+    self.messageTimer = duration
+end
+
+function GameUI:onUpdate(dt)
+    if self.timerActive then
+        self.timeLeft = self.timeLeft - dt
+        if self.txtStatus then
+            self.txtStatus:setText(self.timerLabel .. tostring(math.ceil(self.timeLeft)))
+        end
+        if self.timeLeft <= 0 then self.timerActive = false end
+    end
+    
+    if self.messageTimer > 0 then
+        self.messageTimer = self.messageTimer - dt
+        if self.messageTimer <= 0 and self.txtMessage then 
+            self.txtMessage:setVisible(false) 
+        end
+    end
+end
+
+hype.node.registerComponent(GameUI, "GameUIController", {}, {})
