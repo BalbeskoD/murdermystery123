@@ -1,6 +1,16 @@
-# Murder Mystery 2
+# Murder Mystery 200 Players
 
 **Murder Mystery 2** is a popular multiplayer social deduction game on the **Roblox** platform, created by **Nikilis**.
+
+## 🔥 HypeHype version
+
+One of the most exciting features of the game is **automatic role scaling** based on the number of players in a match.
+
+- For **every 6 players**, the game automatically adds:
+  - **1 Murderer**
+  - **1 Sheriff**
+
+This dynamic scaling keeps matches intense and balanced, making gameplay more chaotic and fun as the player count increases.
 
 ## 🎮 Gameplay Overview
 
