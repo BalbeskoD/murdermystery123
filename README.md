@@ -1,3 +1,35 @@
+# Murder Mystery 2
+
+**Murder Mystery 2** is a popular multiplayer social deduction game on the **Roblox** platform, created by **Nikilis**.
+
+## 🎮 Gameplay Overview
+
+In each round, players are randomly assigned one of three roles:
+- **Innocent** – Try to survive, collect clues, and identify the murderer.
+- **Sheriff** – The only player with a gun, responsible for stopping the murderer.
+- **Murderer** – Eliminate all players without being caught.
+
+## 🕵️ Objective
+
+Each role has a different goal:
+- Innocents must stay alive and help the Sheriff.
+- The Sheriff must protect Innocents and defeat the Murderer.
+- The Murderer must eliminate everyone while remaining hidden.
+
+## ⭐ Key Features
+
+- Fast-paced rounds with suspenseful gameplay  
+- Emphasis on deception, observation, and strategy   
+
+
+
+[![Watch the video](https://img.youtube.com/vi/VIDEO_ID/0.jpg)](https://www.youtube.com/watch?v=bZ5OBDHFqj0)
+
+
+
+
+
+
 ## Murder rules
 
 **Responsible for the game rules.**
