@@ -1,0 +1,55 @@
+local AnimPlayer = hype.component.define("AnimPlayer")
+
+function AnimPlayer:onInit()
+    self.cachedEntity = nil -- Здесь храним ссылку на объект
+end
+
+
+function AnimPlayer:setTarget(player, entity: Entity)
+    if entity then
+        self.cachedEntity = entity
+         print("[AnimPlayer] Goal cashed")
+    end
+end
+
+
+function AnimPlayer:play(player, animName: String)
+     if self.cachedEntity == nil then
+        self.cachedEntity = self.entity
+    end
+
+   
+    if self.cachedEntity == nil then
+        print("[AnimPlayer] Error, dont know who cashed (Entity is nil)")
+        return
+    end
+
+
+    if animName == nil or animName == "" then
+        print("[AnimPlayer] Error: wrong anim name")
+        return
+    end
+
+   
+    local animComp = hype.animation.attach(self.cachedEntity, animName)
+    
+    if animComp then
+       
+        animComp:setAnimation(animName)
+        
+     
+        hype.node.pushOutput(self, "On Play", 1)
+    end
+end
+
+hype.node.registerComponent(AnimPlayer, "AnimPlayer", {
+  
+    { name = "Set Target Entity", type = hype.node.DataType.Entity, handler = AnimPlayer.setTarget },
+    
+   
+    { name = "Play (Anim Name)", type = hype.node.DataType.Text, handler = AnimPlayer.play },
+}, {
+    { name = "On Play", type = hype.node.DataType.Number },
+})
+
+return AnimPlayer
